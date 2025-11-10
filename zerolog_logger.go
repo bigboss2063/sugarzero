@@ -35,7 +35,10 @@ type functionHook struct {
 }
 
 func (h functionHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	if pc, _, _, ok := runtime.Caller(h.skipFrameCount); ok {
+	if pc, file, line, ok := runtime.Caller(h.skipFrameCount); ok {
+		if file != "" {
+			e.Str("position", fmt.Sprintf("%s:%d", file, line))
+		}
 		if fn := runtime.FuncForPC(pc); fn != nil {
 			e.Str("function", fn.Name())
 		}
@@ -73,7 +76,6 @@ func New(ctx context.Context, level string, writers ...io.Writer) (context.Conte
 		Hook(functionHook{skipFrameCount: 4}).
 		With().
 		Timestamp().
-		Caller().
 		Logger()
 
 	zl := &ZeroLogger{
