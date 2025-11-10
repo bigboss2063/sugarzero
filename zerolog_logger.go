@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"runtime"
 	"strings"
@@ -19,6 +18,11 @@ var (
 	loggerKey = ctxKey{name: "logger"}
 	fieldsKey = ctxKey{name: "fields"}
 )
+
+type fieldPair struct {
+	key   string
+	value any
+}
 
 // ZeroLogger wraps zerolog and satisfies the Logger interface.
 type ZeroLogger struct {
@@ -100,28 +104,28 @@ func WithFields(ctx context.Context, keyvals ...any) context.Context {
 		keyvals = keyvals[:len(keyvals)-1]
 	}
 
-	clean := make(map[string]any, len(keyvals)/2)
+	pairs := make([]fieldPair, 0, len(keyvals)/2)
 	for i := 0; i < len(keyvals); i += 2 {
 		key, ok := keyvals[i].(string)
-		if !ok {
+		if !ok || key == "" {
 			// Skip non-string keys
 			continue
 		}
-		clean[key] = keyvals[i+1]
+		pairs = append(pairs, fieldPair{key: key, value: keyvals[i+1]})
 	}
 
-	if len(clean) == 0 {
+	if len(pairs) == 0 {
 		return ctx
 	}
 
-	if existing, ok := ctx.Value(fieldsKey).(map[string]any); ok && len(existing) > 0 {
-		merged := make(map[string]any, len(existing)+len(clean))
-		maps.Copy(merged, existing)
-		maps.Copy(merged, clean)
-		clean = merged
+	if existing, ok := ctx.Value(fieldsKey).([]fieldPair); ok && len(existing) > 0 {
+		merged := make([]fieldPair, 0, len(existing)+len(pairs))
+		merged = append(merged, existing...)
+		merged = append(merged, pairs...)
+		pairs = merged
 	}
 
-	return context.WithValue(ctx, fieldsKey, clean)
+	return context.WithValue(ctx, fieldsKey, pairs)
 }
 
 // WithField is a convenience wrapper to add a single field to the context.
@@ -134,15 +138,7 @@ func WithField(ctx context.Context, key string, value any) context.Context {
 
 // FieldsFromContext exposes the currently attached fields.
 func FieldsFromContext(ctx context.Context) map[string]any {
-	if ctx == nil {
-		return nil
-	}
-	if fields, ok := ctx.Value(fieldsKey).(map[string]any); ok && len(fields) > 0 {
-		clone := make(map[string]any, len(fields))
-		maps.Copy(clone, fields)
-		return clone
-	}
-	return nil
+	return fieldsFromContext(ctx)
 }
 
 func (l *ZeroLogger) Debug(ctx context.Context, args ...any) {
@@ -302,11 +298,24 @@ func selectWriter(writers ...io.Writer) io.Writer {
 }
 
 func fieldsFromContext(ctx context.Context) map[string]any {
+	pairs := fieldPairsFromContext(ctx)
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	fields := make(map[string]any, len(pairs))
+	for _, pair := range pairs {
+		fields[pair.key] = pair.value
+	}
+	return fields
+}
+
+func fieldPairsFromContext(ctx context.Context) []fieldPair {
 	if ctx == nil {
 		return nil
 	}
-	if fields, ok := ctx.Value(fieldsKey).(map[string]any); ok {
-		return fields
+	if pairs, ok := ctx.Value(fieldsKey).([]fieldPair); ok && len(pairs) > 0 {
+		return pairs
 	}
 	return nil
 }
