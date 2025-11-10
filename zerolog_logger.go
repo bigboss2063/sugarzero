@@ -19,11 +19,6 @@ var (
 	fieldsKey = ctxKey{name: "fields"}
 )
 
-type fieldPair struct {
-	key   string
-	value any
-}
-
 // ZeroLogger wraps zerolog and satisfies the Logger interface.
 type ZeroLogger struct {
 	mu     sync.RWMutex
@@ -104,28 +99,27 @@ func WithFields(ctx context.Context, keyvals ...any) context.Context {
 		keyvals = keyvals[:len(keyvals)-1]
 	}
 
-	pairs := make([]fieldPair, 0, len(keyvals)/2)
+	flat := make([]any, 0, len(keyvals))
 	for i := 0; i < len(keyvals); i += 2 {
 		key, ok := keyvals[i].(string)
 		if !ok || key == "" {
 			// Skip non-string keys
 			continue
 		}
-		pairs = append(pairs, fieldPair{key: key, value: keyvals[i+1]})
+		flat = append(flat, key, keyvals[i+1])
 	}
 
-	if len(pairs) == 0 {
+	if len(flat) == 0 {
 		return ctx
 	}
 
-	if existing, ok := ctx.Value(fieldsKey).([]fieldPair); ok && len(existing) > 0 {
-		merged := make([]fieldPair, 0, len(existing)+len(pairs))
+	if existing, ok := ctx.Value(fieldsKey).([]any); ok && len(existing) > 0 {
+		merged := make([]any, 0, len(existing)+len(flat))
 		merged = append(merged, existing...)
-		merged = append(merged, pairs...)
-		pairs = merged
+		flat = append(merged, flat...)
 	}
 
-	return context.WithValue(ctx, fieldsKey, pairs)
+	return context.WithValue(ctx, fieldsKey, flat)
 }
 
 // WithField is a convenience wrapper to add a single field to the context.
@@ -232,7 +226,7 @@ func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, args ..
 		return
 	}
 
-	if fields := fieldsFromContext(ctx); len(fields) > 0 {
+	if fields := flattenedFieldsFromContext(ctx); len(fields) > 0 {
 		event.Fields(fields)
 	}
 
@@ -260,7 +254,7 @@ func (l *ZeroLogger) writef(ctx context.Context, level zerolog.Level, format str
 		return
 	}
 
-	if fields := fieldsFromContext(ctx); len(fields) > 0 {
+	if fields := flattenedFieldsFromContext(ctx); len(fields) > 0 {
 		event.Fields(fields)
 	}
 
@@ -298,24 +292,25 @@ func selectWriter(writers ...io.Writer) io.Writer {
 }
 
 func fieldsFromContext(ctx context.Context) map[string]any {
-	pairs := fieldPairsFromContext(ctx)
-	if len(pairs) == 0 {
+	flat := flattenedFieldsFromContext(ctx)
+	if len(flat) == 0 {
 		return nil
 	}
 
-	fields := make(map[string]any, len(pairs))
-	for _, pair := range pairs {
-		fields[pair.key] = pair.value
+	fields := make(map[string]any, len(flat)/2)
+	for i := 0; i+1 < len(flat); i += 2 {
+		key, _ := flat[i].(string)
+		fields[key] = flat[i+1]
 	}
 	return fields
 }
 
-func fieldPairsFromContext(ctx context.Context) []fieldPair {
+func flattenedFieldsFromContext(ctx context.Context) []any {
 	if ctx == nil {
 		return nil
 	}
-	if pairs, ok := ctx.Value(fieldsKey).([]fieldPair); ok && len(pairs) > 0 {
-		return pairs
+	if fields, ok := ctx.Value(fieldsKey).([]any); ok && len(fields) > 0 {
+		return fields
 	}
 	return nil
 }
