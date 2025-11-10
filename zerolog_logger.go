@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -14,10 +13,18 @@ import (
 
 type ctxKey struct{ name string }
 
+const (
+	// callerSkipFramePublic is the skip frame count for public log methods (Debug, Info, etc.)
+	callerSkipFramePublic = 5
+	// callerSkipFrameInternal is the skip frame count when logging internal warnings
+	callerSkipFrameInternal = 3
+)
+
 var (
 	loggerKey        = ctxKey{name: "logger"}
 	fieldsKey        = ctxKey{name: "fields"}
 	configureZerolog sync.Once
+	globalLogger     *ZeroLogger
 )
 
 // ZeroLogger wraps zerolog and satisfies the Logger interface.
@@ -29,38 +36,27 @@ type ZeroLogger struct {
 
 var _ Logger = (*ZeroLogger)(nil)
 
-// functionHook adds function field to log events using runtime.FuncForPC
-type functionHook struct {
-	skipFrameCount int
-}
-
-func (h functionHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	if pc, file, line, ok := runtime.Caller(h.skipFrameCount); ok {
-		if file != "" {
-			e.Str("position", fmt.Sprintf("%s:%d", file, line))
-		}
-		if fn := runtime.FuncForPC(pc); fn != nil {
-			e.Str("function", fn.Name())
-		}
-	}
-}
-
-// New creates a zerolog-backed Logger and injects it into the returned context.
-// When writers is empty, os.Stdout is used.
-func New(ctx context.Context, level string, writers ...io.Writer) (context.Context, Logger, error) {
+// New creates a zerolog-backed Logger, stores it as the global default, and
+// injects it into the returned context. When writers is empty, os.Stdout is used.
+// ! Notice: This function should be called only once during application initialization.
+func New(ctx context.Context, level string, writers ...io.Writer) (context.Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	if globalLogger != nil {
+		return context.WithValue(ctx, loggerKey, globalLogger), nil
+	}
+
 	lvl, err := parseLevel(level)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, err
 	}
 
 	writer := selectWriter(writers...)
 
-	// Configure zerolog to use "position" as caller field name and uppercase level
 	configureZerolog.Do(func() {
+		// Configure zerolog to use "position" as caller field name and uppercase level
 		zerolog.CallerFieldName = "position"
 		zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
 			return fmt.Sprintf("%s:%d", file, line)
@@ -68,23 +64,26 @@ func New(ctx context.Context, level string, writers ...io.Writer) (context.Conte
 		zerolog.LevelFieldMarshalFunc = func(l zerolog.Level) string {
 			return strings.ToUpper(l.String())
 		}
+
+		// Create logger with native Caller() for position
+		base := zerolog.New(writer).
+			Level(lvl).
+			With().
+			Timestamp().
+			Caller().
+			Logger()
+
+		globalLogger = &ZeroLogger{
+			logger: base,
+			level:  lvl,
+		}
 	})
 
-	// Create logger with native Caller() for position and hook for function
-	base := zerolog.New(writer).
-		Level(lvl).
-		Hook(functionHook{skipFrameCount: 4}).
-		With().
-		Timestamp().
-		Logger()
-
-	zl := &ZeroLogger{
-		logger: base,
-		level:  lvl,
+	if globalLogger == nil {
+		return ctx, fmt.Errorf("loggerv2: logger not initialized")
 	}
 
-	ctx = context.WithValue(ctx, loggerKey, zl)
-	return ctx, zl, nil
+	return context.WithValue(ctx, loggerKey, globalLogger), nil
 }
 
 // WithFields merges the provided fields into the context so they are emitted
@@ -137,67 +136,77 @@ func WithField(ctx context.Context, key string, value any) context.Context {
 
 // FieldsFromContext exposes the currently attached fields.
 func FieldsFromContext(ctx context.Context) map[string]any {
-	return fieldsFromContext(ctx)
+	flat := flattenedFieldsFromContext(ctx)
+	if len(flat) == 0 {
+		return nil
+	}
+
+	fields := make(map[string]any, len(flat)/2)
+	for i := 0; i+1 < len(flat); i += 2 {
+		key, _ := flat[i].(string)
+		fields[key] = flat[i+1]
+	}
+	return fields
 }
 
 func (l *ZeroLogger) Debug(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.DebugLevel, args...)
+	l.writeArgs(ctx, zerolog.DebugLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Debugf(ctx context.Context, format string, args ...any) {
-	l.writef(ctx, zerolog.DebugLevel, format, args...)
+	l.writef(ctx, zerolog.DebugLevel, callerSkipFramePublic, format, args...)
 }
 
 func (l *ZeroLogger) Debugln(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.DebugLevel, args...)
+	l.writeArgs(ctx, zerolog.DebugLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Info(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.InfoLevel, args...)
+	l.writeArgs(ctx, zerolog.InfoLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Infof(ctx context.Context, format string, args ...any) {
-	l.writef(ctx, zerolog.InfoLevel, format, args...)
+	l.writef(ctx, zerolog.InfoLevel, callerSkipFramePublic, format, args...)
 }
 
 func (l *ZeroLogger) Infoln(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.InfoLevel, args...)
+	l.writeArgs(ctx, zerolog.InfoLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Warn(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.WarnLevel, args...)
+	l.writeArgs(ctx, zerolog.WarnLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Warnf(ctx context.Context, format string, args ...any) {
-	l.writef(ctx, zerolog.WarnLevel, format, args...)
+	l.writef(ctx, zerolog.WarnLevel, callerSkipFramePublic, format, args...)
 }
 
 func (l *ZeroLogger) Warnln(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.WarnLevel, args...)
+	l.writeArgs(ctx, zerolog.WarnLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Error(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.ErrorLevel, args...)
+	l.writeArgs(ctx, zerolog.ErrorLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Errorf(ctx context.Context, format string, args ...any) {
-	l.writef(ctx, zerolog.ErrorLevel, format, args...)
+	l.writef(ctx, zerolog.ErrorLevel, callerSkipFramePublic, format, args...)
 }
 
 func (l *ZeroLogger) Errorln(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.ErrorLevel, args...)
+	l.writeArgs(ctx, zerolog.ErrorLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Fatal(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.FatalLevel, args...)
+	l.writeArgs(ctx, zerolog.FatalLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) Fatalf(ctx context.Context, format string, args ...any) {
-	l.writef(ctx, zerolog.FatalLevel, format, args...)
+	l.writef(ctx, zerolog.FatalLevel, callerSkipFramePublic, format, args...)
 }
 
 func (l *ZeroLogger) Fatalln(ctx context.Context, args ...any) {
-	l.writeArgs(ctx, zerolog.FatalLevel, args...)
+	l.writeArgs(ctx, zerolog.FatalLevel, callerSkipFramePublic, args...)
 }
 
 func (l *ZeroLogger) SetLogLevel(level string) {
@@ -220,13 +229,12 @@ func (l *ZeroLogger) GetLogLevel() string {
 	return lvl.String()
 }
 
-func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, args ...any) {
-	active := l.loggerFromContext(ctx)
-	active.mu.RLock()
-	logger := active.logger
-	active.mu.RUnlock()
+func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, skipFrame int, args ...any) {
+	l.mu.RLock()
+	logger := l.logger
+	l.mu.RUnlock()
 
-	event := logger.WithLevel(level).CallerSkipFrame(2)
+	event := logger.WithLevel(level).CallerSkipFrame(skipFrame)
 	if event == nil {
 		return
 	}
@@ -248,13 +256,12 @@ func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, args ..
 	}
 }
 
-func (l *ZeroLogger) writef(ctx context.Context, level zerolog.Level, format string, args ...any) {
-	active := l.loggerFromContext(ctx)
-	active.mu.RLock()
-	logger := active.logger
-	active.mu.RUnlock()
+func (l *ZeroLogger) writef(ctx context.Context, level zerolog.Level, skipFrame int, format string, args ...any) {
+	l.mu.RLock()
+	logger := l.logger
+	l.mu.RUnlock()
 
-	event := logger.WithLevel(level).CallerSkipFrame(2)
+	event := logger.WithLevel(level).CallerSkipFrame(skipFrame)
 	if event == nil {
 		return
 	}
@@ -266,13 +273,16 @@ func (l *ZeroLogger) writef(ctx context.Context, level zerolog.Level, format str
 	event.Msgf(format, args...)
 }
 
-func (l *ZeroLogger) loggerFromContext(ctx context.Context) *ZeroLogger {
-	if ctx != nil {
-		if ctxLogger, ok := ctx.Value(loggerKey).(*ZeroLogger); ok && ctxLogger != nil {
-			return ctxLogger
-		}
+func (l *ZeroLogger) logMissingLoggerWarning() {
+	l.mu.RLock()
+	logger := l.logger
+	l.mu.RUnlock()
+
+	event := logger.WithLevel(zerolog.WarnLevel).CallerSkipFrame(callerSkipFrameInternal)
+	if event == nil {
+		return
 	}
-	return l
+	event.Msg("context does not contain a logger, using fallback logger")
 }
 
 func parseLevel(level string) (zerolog.Level, error) {
@@ -296,26 +306,22 @@ func selectWriter(writers ...io.Writer) io.Writer {
 	return io.MultiWriter(writers...)
 }
 
-func fieldsFromContext(ctx context.Context) map[string]any {
-	flat := flattenedFieldsFromContext(ctx)
-	if len(flat) == 0 {
-		return nil
-	}
-
-	fields := make(map[string]any, len(flat)/2)
-	for i := 0; i+1 < len(flat); i += 2 {
-		key, _ := flat[i].(string)
-		fields[key] = flat[i+1]
-	}
-	return fields
-}
-
 func flattenedFieldsFromContext(ctx context.Context) []any {
 	if ctx == nil {
 		return nil
 	}
 	if fields, ok := ctx.Value(fieldsKey).([]any); ok && len(fields) > 0 {
 		return fields
+	}
+	return nil
+}
+
+func loggerFromContextValue(ctx context.Context) *ZeroLogger {
+	if ctx == nil {
+		return nil
+	}
+	if ctxLogger, ok := ctx.Value(loggerKey).(*ZeroLogger); ok && ctxLogger != nil {
+		return ctxLogger
 	}
 	return nil
 }

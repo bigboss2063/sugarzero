@@ -10,10 +10,12 @@ import (
 
 func main() {
 	// 1. 初始化 logger 并注入到上下文
-	ctx, logger, err := loggerv2.New(context.Background(), "debug")
+	ctx, err := loggerv2.New(context.Background(), "debug")
 	if err != nil {
 		panic(err)
 	}
+
+	loggerv2.Infof(context.Background(), "no logger with context, will give an additional warning log")
 
 	// 添加应用级别的字段
 	ctx = loggerv2.WithFields(ctx,
@@ -30,7 +32,7 @@ func main() {
 	processRequest(ctx, "req-002", "jane")
 
 	// 4. 动态修改日志级别
-	logger.SetLogLevel("error")
+	loggerv2.SetLogLevel(ctx, "error")
 	loggerv2.Debug(ctx, "This debug message will not be shown")
 	loggerv2.Error(ctx, "But errors are still shown")
 

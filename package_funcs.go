@@ -2,119 +2,126 @@ package loggerv2
 
 import "context"
 
-// Debug logs a debug message using the logger from context.
-// If no logger is found in context, the message is silently dropped.
 func Debug(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Debug(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Debug(resolved, args...)
+	})
 }
 
-// Debugf logs a formatted debug message using the logger from context.
 func Debugf(ctx context.Context, format string, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Debugf(ctx, format, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Debugf(resolved, format, args...)
+	})
 }
 
-// Debugln logs a debug message using the logger from context.
 func Debugln(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Debugln(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Debugln(resolved, args...)
+	})
 }
 
-// Info logs an info message using the logger from context.
 func Info(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Info(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Info(resolved, args...)
+	})
 }
 
-// Infof logs a formatted info message using the logger from context.
 func Infof(ctx context.Context, format string, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Infof(ctx, format, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Infof(resolved, format, args...)
+	})
 }
 
-// Infoln logs an info message using the logger from context.
 func Infoln(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Infoln(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Infoln(resolved, args...)
+	})
 }
 
-// Warn logs a warning message using the logger from context.
 func Warn(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Warn(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Warn(resolved, args...)
+	})
 }
 
-// Warnf logs a formatted warning message using the logger from context.
 func Warnf(ctx context.Context, format string, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Warnf(ctx, format, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Warnf(resolved, format, args...)
+	})
 }
 
-// Warnln logs a warning message using the logger from context.
 func Warnln(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Warnln(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Warnln(resolved, args...)
+	})
 }
 
-// Error logs an error message using the logger from context.
 func Error(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Error(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Error(resolved, args...)
+	})
 }
 
-// Errorf logs a formatted error message using the logger from context.
 func Errorf(ctx context.Context, format string, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Errorf(ctx, format, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Errorf(resolved, format, args...)
+	})
 }
 
-// Errorln logs an error message using the logger from context.
 func Errorln(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Errorln(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Errorln(resolved, args...)
+	})
 }
 
-// Fatal logs a fatal message using the logger from context.
 func Fatal(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Fatal(ctx, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Fatal(resolved, args...)
+	})
 }
 
-// Fatalf logs a formatted fatal message using the logger from context.
 func Fatalf(ctx context.Context, format string, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Fatalf(ctx, format, args...)
-	}
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Fatalf(resolved, format, args...)
+	})
 }
 
-// Fatalln logs a fatal message using the logger from context.
 func Fatalln(ctx context.Context, args ...any) {
-	if logger := getLoggerFromContext(ctx); logger != nil {
-		logger.Fatalln(ctx, args...)
+	withLogger(ctx, func(logger *ZeroLogger, resolved context.Context) {
+		logger.Fatalln(resolved, args...)
+	})
+}
+
+func withLogger(ctx context.Context, fn func(*ZeroLogger, context.Context)) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if logger := loggerFromContextValue(ctx); logger != nil {
+		fn(logger, ctx)
+		return
+	}
+	if globalLogger != nil {
+		globalLogger.logMissingLoggerWarning()
+		fn(globalLogger, ctx)
 	}
 }
 
-// getLoggerFromContext retrieves the Logger from context.
-func getLoggerFromContext(ctx context.Context) Logger {
-	if ctx == nil {
-		return nil
+func SetLogLevel(ctx context.Context, level string) {
+	if logger := loggerFromContextValue(ctx); logger != nil {
+		logger.SetLogLevel(level)
+		return
 	}
-	if logger, ok := ctx.Value(loggerKey).(Logger); ok && logger != nil {
-		return logger
+	if globalLogger != nil {
+		globalLogger.SetLogLevel(level)
 	}
-	return nil
+}
+
+func GetLogLevel(ctx context.Context) string {
+	if logger := loggerFromContextValue(ctx); logger != nil {
+		return logger.GetLogLevel()
+	}
+	if globalLogger != nil {
+		return globalLogger.GetLogLevel()
+	}
+	return ""
 }

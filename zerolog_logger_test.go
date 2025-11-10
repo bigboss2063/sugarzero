@@ -1,15 +1,33 @@
 package loggerv2_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/bigboss2063/loggerv2"
 )
 
+var testWriter bytes.Buffer
+
+func TestMain(m *testing.M) {
+	if _, err := loggerv2.New(context.Background(), "debug", &testWriter); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
+type logEntry struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 func TestLoggerWithContext(t *testing.T) {
-	// 初始化 logger 并注入上下文
-	ctx, _, err := loggerv2.New(context.Background(), "debug")
+	// 初始�?logger 并注入上下文
+	ctx, err := loggerv2.New(context.Background(), "debug")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -20,15 +38,14 @@ func TestLoggerWithContext(t *testing.T) {
 		"user_id", 456,
 	)
 
-	// 使用包级函数直接输出日志（会包含字段）
-	loggerv2.Info(ctx, "Processing request")
+	// 使用包级函数直接输出日志（会包含字段�?	loggerv2.Info(ctx, "Processing request")
 	loggerv2.Infof(ctx, "User %s logged in", "john")
 	loggerv2.Infoln(ctx, "Request", "completed")
 }
 
 func TestLoggerWithoutContext(t *testing.T) {
-	// 初始化 logger 并注入上下文
-	ctx, _, err := loggerv2.New(context.Background(), "info")
+	// 初始�?logger 并注入上下文
+	ctx, err := loggerv2.New(context.Background(), "info")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -37,13 +54,41 @@ func TestLoggerWithoutContext(t *testing.T) {
 	loggerv2.Info(ctx, "This works with context from New()")
 	loggerv2.Warnf(ctx, "Warning: %s", "using package-level functions")
 
-	// 使用空上下文（没有 logger，日志会被丢弃）
+	// 使用空上下文（没�?logger，日志会被丢弃）
 	emptyCtx := context.Background()
 	loggerv2.Info(emptyCtx, "This will be silently dropped")
 }
 
+func TestPackageLoggerWarnsWhenContextMissingLogger(t *testing.T) {
+	testWriter.Reset()
+
+	loggerv2.Info(context.Background(), "no logger in context")
+
+	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected log output")
+	}
+
+	var entry logEntry
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("failed to decode log entry: %v", err)
+	}
+
+	if strings.ToUpper(entry.Level) != "WARN" {
+		t.Fatalf("expected WARN level, got %s", entry.Level)
+	}
+
+	if entry.Message != "context does not contain a logger, using fallback logger" {
+		t.Fatalf("unexpected warning message: %s", entry.Message)
+	}
+
+	if got := loggerv2.GetLogLevel(context.Background()); got != "debug" {
+		t.Fatalf("logger level changed unexpectedly: %s", got)
+	}
+}
+
 func TestLoggerWithAdditionalFields(t *testing.T) {
-	ctx, _, err := loggerv2.New(context.Background(), "debug")
+	ctx, err := loggerv2.New(context.Background(), "debug")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -70,23 +115,24 @@ func TestLoggerWithAdditionalFields(t *testing.T) {
 }
 
 func TestLogLevelChange(t *testing.T) {
-	_, logger, err := loggerv2.New(context.Background(), "info")
+	ctx, err := loggerv2.New(context.Background(), "info")
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	if logger.GetLogLevel() != "info" {
-		t.Errorf("Expected level 'info', got '%s'", logger.GetLogLevel())
+	loggerv2.SetLogLevel(ctx, "info")
+	if loggerv2.GetLogLevel(ctx) != "info" {
+		t.Errorf("Expected level 'info', got '%s'", loggerv2.GetLogLevel(ctx))
 	}
 
-	logger.SetLogLevel("error")
-	if logger.GetLogLevel() != "error" {
-		t.Errorf("Expected level 'error', got '%s'", logger.GetLogLevel())
+	loggerv2.SetLogLevel(ctx, "error")
+	if loggerv2.GetLogLevel(ctx) != "error" {
+		t.Errorf("Expected level 'error', got '%s'", loggerv2.GetLogLevel(ctx))
 	}
 }
 
 func BenchmarkLoggerWithFields(b *testing.B) {
-	ctx, _, _ := loggerv2.New(context.Background(), "info")
+	ctx, _ := loggerv2.New(context.Background(), "info")
 	ctx = loggerv2.WithFields(ctx,
 		"request_id", "bench-123",
 		"user_id", 789,
@@ -99,7 +145,7 @@ func BenchmarkLoggerWithFields(b *testing.B) {
 }
 
 func BenchmarkLoggerWithoutPreFormatting(b *testing.B) {
-	ctx, _, _ := loggerv2.New(context.Background(), "info")
+	ctx, _ := loggerv2.New(context.Background(), "info")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

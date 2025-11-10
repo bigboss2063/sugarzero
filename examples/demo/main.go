@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+
 	"github.com/bigboss2063/loggerv2"
 )
 
 func main() {
-	ctx, _, err := loggerv2.New(context.Background(), "debug")
+	ctx, err := loggerv2.New(context.Background(), "debug")
 	if err != nil {
 		panic(err)
 	}
