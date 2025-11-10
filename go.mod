@@ -1,4 +1,4 @@
-module github.com/bigboss2063/loggerv2
+module github.com/bigboss2063/sugarzero
 
 go 1.24.5
 

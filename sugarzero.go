@@ -1,4 +1,4 @@
-package loggerv2
+package sugarzero
 
 import (
 	"context"
@@ -34,7 +34,12 @@ type ZeroLogger struct {
 	level  zerolog.Level
 }
 
-var _ Logger = (*ZeroLogger)(nil)
+// Reset resets the global logger state. This is intended for testing purposes only.
+// ! Notice: DO NOT use this in production code.
+func Reset() {
+	globalLogger = nil
+	configureZerolog = sync.Once{}
+}
 
 // New creates a zerolog-backed Logger, stores it as the global default, and
 // injects it into the returned context. When writers is empty, os.Stdout is used.
@@ -80,7 +85,7 @@ func New(ctx context.Context, level string, writers ...io.Writer) (context.Conte
 	})
 
 	if globalLogger == nil {
-		return ctx, fmt.Errorf("loggerv2: logger not initialized")
+		return ctx, fmt.Errorf("sugarzero: logger not initialized")
 	}
 
 	return context.WithValue(ctx, loggerKey, globalLogger), nil
