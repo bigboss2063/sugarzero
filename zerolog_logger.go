@@ -15,8 +15,9 @@ import (
 type ctxKey struct{ name string }
 
 var (
-	loggerKey = ctxKey{name: "logger"}
-	fieldsKey = ctxKey{name: "fields"}
+	loggerKey        = ctxKey{name: "logger"}
+	fieldsKey        = ctxKey{name: "fields"}
+	configureZerolog sync.Once
 )
 
 // ZeroLogger wraps zerolog and satisfies the Logger interface.
@@ -56,13 +57,15 @@ func New(ctx context.Context, level string, writers ...io.Writer) (context.Conte
 	writer := selectWriter(writers...)
 
 	// Configure zerolog to use "position" as caller field name and uppercase level
-	zerolog.CallerFieldName = "position"
-	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
-		return fmt.Sprintf("%s:%d", file, line)
-	}
-	zerolog.LevelFieldMarshalFunc = func(l zerolog.Level) string {
-		return strings.ToUpper(l.String())
-	}
+	configureZerolog.Do(func() {
+		zerolog.CallerFieldName = "position"
+		zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+			return fmt.Sprintf("%s:%d", file, line)
+		}
+		zerolog.LevelFieldMarshalFunc = func(l zerolog.Level) string {
+			return strings.ToUpper(l.String())
+		}
+	})
 
 	// Create logger with native Caller() for position and hook for function
 	base := zerolog.New(writer).
