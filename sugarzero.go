@@ -9,9 +9,16 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ctxKey struct{ name string }
+
+// traceInfo stores the OpenTelemetry identifiers associated with a log entry.
+type traceInfo struct {
+	traceID string
+	spanID  string
+}
 
 const (
 	// callerSkipFramePublic is the skip frame count for public log methods (Debug, Info, etc.)
@@ -23,6 +30,7 @@ const (
 var (
 	loggerKey        = ctxKey{name: "logger"}
 	fieldsKey        = ctxKey{name: "fields"}
+	traceKey         = ctxKey{name: "trace"}
 	configureZerolog sync.Once
 	globalLogger     *ZeroLogger
 )
@@ -139,6 +147,40 @@ func WithField(ctx context.Context, key string, value any) context.Context {
 	return WithFields(ctx, key, value)
 }
 
+// WithTracing extracts the current OpenTelemetry span information from the context
+// and stores it so the logger can emit it automatically.
+func WithTracing(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
+		return ctx
+	}
+
+	spanCtx := span.SpanContext()
+	if !spanCtx.IsValid() {
+		return ctx
+	}
+
+	traceID := spanCtx.TraceID().String()
+	spanID := spanCtx.SpanID().String()
+
+	if existing := traceFromContext(ctx); existing != nil {
+		if existing.traceID == traceID && existing.spanID == spanID {
+			return ctx
+		}
+	}
+
+	traceData := &traceInfo{
+		traceID: traceID,
+		spanID:  spanID,
+	}
+
+	return context.WithValue(ctx, traceKey, traceData)
+}
+
 // FieldsFromContext exposes the currently attached fields.
 func FieldsFromContext(ctx context.Context) map[string]any {
 	flat := flattenedFieldsFromContext(ctx)
@@ -241,9 +283,16 @@ func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, skipFra
 	logger := l.logger
 	l.mu.RUnlock()
 
+	ctx = ensureTracing(ctx)
+
 	event := logger.WithLevel(level).CallerSkipFrame(skipFrame)
 	if event == nil {
 		return
+	}
+
+	if trace := traceFromContext(ctx); trace != nil {
+		event.Str("trace_id", trace.traceID)
+		event.Str("span_id", trace.spanID)
 	}
 
 	if fields := flattenedFieldsFromContext(ctx); len(fields) > 0 {
@@ -267,9 +316,16 @@ func (l *ZeroLogger) writef(ctx context.Context, level zerolog.Level, skipFrame 
 	logger := l.logger
 	l.mu.RUnlock()
 
+	ctx = ensureTracing(ctx)
+
 	event := logger.WithLevel(level).CallerSkipFrame(skipFrame)
 	if event == nil {
 		return
+	}
+
+	if trace := traceFromContext(ctx); trace != nil {
+		event.Str("trace_id", trace.traceID)
+		event.Str("span_id", trace.spanID)
 	}
 
 	if fields := flattenedFieldsFromContext(ctx); len(fields) > 0 {
@@ -328,6 +384,20 @@ func loggerFromContextValue(ctx context.Context) *ZeroLogger {
 	}
 	if ctxLogger, ok := ctx.Value(loggerKey).(*ZeroLogger); ok && ctxLogger != nil {
 		return ctxLogger
+	}
+	return nil
+}
+
+func ensureTracing(ctx context.Context) context.Context {
+	return WithTracing(ctx)
+}
+
+func traceFromContext(ctx context.Context) *traceInfo {
+	if ctx == nil {
+		return nil
+	}
+	if trace, ok := ctx.Value(traceKey).(*traceInfo); ok && trace != nil {
+		return trace
 	}
 	return nil
 }

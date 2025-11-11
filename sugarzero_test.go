@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bigboss2063/sugarzero"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // setupTest creates a fresh logger for each test with isolated state
@@ -42,6 +43,33 @@ type logEntry struct {
 	Message string `json:"message"`
 }
 
+func readLogEntry(t *testing.T, buf *bytes.Buffer, index ...int) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected log output")
+	}
+
+	target := len(lines) - 1
+	if len(index) > 0 {
+		target = index[0]
+		if target < 0 {
+			target = len(lines) + target
+		}
+		if target < 0 || target >= len(lines) {
+			t.Fatalf("requested log index %d out of range (total %d)", index[0], len(lines))
+		}
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[target]), &entry); err != nil {
+		t.Fatalf("failed to decode log entry: %v", err)
+	}
+
+	return entry
+}
+
 func TestLoggerWithContext(t *testing.T) {
 	ctx, testWriter := setupTest(t, "debug")
 
@@ -53,15 +81,7 @@ func TestLoggerWithContext(t *testing.T) {
 
 	sugarzero.Infof(ctx, "User %s logged in", "john")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "INFO" {
 		t.Fatalf("expected INFO level, got %s", entry["level"])
@@ -82,14 +102,7 @@ func TestLoggerWithContext(t *testing.T) {
 	testWriter.Reset()
 	sugarzero.Infoln(ctx, "Request", "completed")
 
-	lines = strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output for Infoln")
-	}
-
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry = readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "INFO" {
 		t.Fatalf("expected INFO level, got %s", entry["level"])
@@ -105,22 +118,14 @@ func TestPackageLoggerWarnsWhenContextMissingLogger(t *testing.T) {
 
 	sugarzero.Info(context.Background(), "no logger in context")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) == 0 {
-		t.Fatal("expected log output")
+	entry := readLogEntry(t, testWriter, 0)
+
+	if strings.ToUpper(entry["level"].(string)) != "WARN" {
+		t.Fatalf("expected WARN level, got %s", entry["level"])
 	}
 
-	var entry logEntry
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
-
-	if strings.ToUpper(entry.Level) != "WARN" {
-		t.Fatalf("expected WARN level, got %s", entry.Level)
-	}
-
-	if entry.Message != "context does not contain a logger, using fallback logger" {
-		t.Fatalf("unexpected warning message: %s", entry.Message)
+	if entry["message"].(string) != "context does not contain a logger, using fallback logger" {
+		t.Fatalf("unexpected warning message: %s", entry["message"])
 	}
 
 	if got := sugarzero.GetLogLevel(context.Background()); got != "debug" {
@@ -135,15 +140,7 @@ func TestLoggerWithAdditionalFields(t *testing.T) {
 	ctx = sugarzero.WithField(ctx, "service", "api-gateway")
 	sugarzero.Debug(ctx, "Service initialized")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "DEBUG" {
 		t.Fatalf("expected DEBUG level, got %s", entry["level"])
@@ -165,14 +162,7 @@ func TestLoggerWithAdditionalFields(t *testing.T) {
 	)
 	sugarzero.Info(ctx, "Handling request")
 
-	lines = strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output for Info")
-	}
-
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry = readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "INFO" {
 		t.Fatalf("expected INFO level, got %s", entry["level"])
@@ -222,15 +212,7 @@ func TestLogLevelChange(t *testing.T) {
 	testWriter.Reset()
 	sugarzero.Info(ctx, "This should appear")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output at info level")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "INFO" {
 		t.Fatalf("expected INFO level, got %s", entry["level"])
@@ -253,14 +235,7 @@ func TestLogLevelChange(t *testing.T) {
 	testWriter.Reset()
 	sugarzero.Error(ctx, "This is an error")
 
-	lines = strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output at error level")
-	}
-
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry = readLogEntry(t, testWriter)
 
 	if strings.ToUpper(entry["level"].(string)) != "ERROR" {
 		t.Fatalf("expected ERROR level, got %s", entry["level"])
@@ -291,15 +266,7 @@ func TestAllLogLevels(t *testing.T) {
 			testWriter.Reset()
 			tt.logFunc(ctx, tt.message)
 
-			lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-			if len(lines) < 1 {
-				t.Fatalf("expected log output for %s", tt.name)
-			}
-
-			var entry map[string]any
-			if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-				t.Fatalf("failed to decode log entry: %v", err)
-			}
+			entry := readLogEntry(t, testWriter)
 
 			if strings.ToUpper(entry["level"].(string)) != tt.expected {
 				t.Fatalf("expected %s level, got %s", tt.expected, entry["level"])
@@ -334,15 +301,7 @@ func TestFormattedLogFunctions(t *testing.T) {
 			testWriter.Reset()
 			tt.logFunc(ctx, tt.format, tt.args...)
 
-			lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-			if len(lines) < 1 {
-				t.Fatalf("expected log output for %s", tt.name)
-			}
-
-			var entry map[string]any
-			if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-				t.Fatalf("failed to decode log entry: %v", err)
-			}
+			entry := readLogEntry(t, testWriter)
 
 			if strings.ToUpper(entry["level"].(string)) != tt.level {
 				t.Fatalf("expected %s level, got %s", tt.level, entry["level"])
@@ -375,15 +334,7 @@ func TestLogFunctionsWithLn(t *testing.T) {
 			testWriter.Reset()
 			tt.logFunc(ctx, tt.args...)
 
-			lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-			if len(lines) < 1 {
-				t.Fatalf("expected log output for %s", tt.name)
-			}
-
-			var entry map[string]any
-			if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-				t.Fatalf("failed to decode log entry: %v", err)
-			}
+			entry := readLogEntry(t, testWriter)
 
 			if strings.ToUpper(entry["level"].(string)) != tt.level {
 				t.Fatalf("expected %s level, got %s", tt.level, entry["level"])
@@ -404,16 +355,10 @@ func TestNilContext(t *testing.T) {
 
 	sugarzero.Info(nil, "nil context message")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 2 {
-		t.Fatal("expected warning and info log output")
-	}
+	// 至少应包含警告和 Info
+	_ = readLogEntry(t, testWriter, 1)
 
-	// 第一条应该是警告
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter, 0)
 
 	if strings.ToUpper(entry["level"].(string)) != "WARN" {
 		t.Fatalf("expected WARN level for missing logger, got %s", entry["level"])
@@ -441,15 +386,7 @@ func TestEmptyFields(t *testing.T) {
 	ctx = sugarzero.WithField(ctx, "", "value")
 	sugarzero.Info(ctx, "message with empty key")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	// 空 key 应该被忽略
 	if _, exists := entry[""]; exists {
@@ -464,15 +401,7 @@ func TestOddNumberOfFieldsIgnoresLastValue(t *testing.T) {
 	ctx = sugarzero.WithFields(ctx, "key1", "value1", "key2")
 	sugarzero.Info(ctx, "message with odd fields")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	if entry["key1"].(string) != "value1" {
 		t.Fatalf("expected key1=value1, got %v", entry["key1"])
@@ -496,15 +425,7 @@ func TestFieldsMerging(t *testing.T) {
 
 	sugarzero.Info(ctx, "message with merged fields")
 
-	lines := strings.Split(strings.TrimSpace(testWriter.String()), "\n")
-	if len(lines) < 1 {
-		t.Fatal("expected log output")
-	}
-
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("failed to decode log entry: %v", err)
-	}
+	entry := readLogEntry(t, testWriter)
 
 	// 验证所有字段都存在
 	expectedFields := map[string]string{
@@ -571,6 +492,50 @@ func TestGetLogLevelWithNoLogger(t *testing.T) {
 	}
 }
 
+func TestLoggerAutomaticallyInjectsTraceMetadata(t *testing.T) {
+	ctx, testWriter := setupTest(t, "info")
+
+	tp := sdktrace.NewTracerProvider()
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+	})
+
+	tracer := tp.Tracer("test-tracer")
+	ctx, span := tracer.Start(ctx, "traceable-operation")
+	defer span.End()
+
+	sugarzero.Info(ctx, "message with trace metadata")
+
+	entry := readLogEntry(t, testWriter)
+	spanCtx := span.SpanContext()
+
+	traceID, ok := entry["trace_id"].(string)
+	if !ok || traceID != spanCtx.TraceID().String() {
+		t.Fatalf("expected trace_id %s, got %v", spanCtx.TraceID().String(), entry["trace_id"])
+	}
+
+	spanID, ok := entry["span_id"].(string)
+	if !ok || spanID != spanCtx.SpanID().String() {
+		t.Fatalf("expected span_id %s, got %v", spanCtx.SpanID().String(), entry["span_id"])
+	}
+}
+
+func TestLoggerOmitsTraceMetadataWithoutSpan(t *testing.T) {
+	ctx, testWriter := setupTest(t, "info")
+
+	sugarzero.Info(ctx, "message without trace metadata")
+
+	entry := readLogEntry(t, testWriter)
+
+	if _, ok := entry["trace_id"]; ok {
+		t.Fatal("did not expect trace_id in log entry")
+	}
+
+	if _, ok := entry["span_id"]; ok {
+		t.Fatal("did not expect span_id in log entry")
+	}
+}
+
 func TestFieldsFromEmptyContext(t *testing.T) {
 	ctx := context.Background()
 	fields := sugarzero.FieldsFromContext(ctx)
@@ -591,8 +556,7 @@ func BenchmarkLoggerWithFields(b *testing.B) {
 		sugarzero.Reset()
 	})
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sugarzero.Info(ctx, "Benchmark message")
 	}
 }
@@ -605,8 +569,7 @@ func BenchmarkLoggerWithoutPreFormatting(b *testing.B) {
 		sugarzero.Reset()
 	})
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		sugarzero.Infof(ctx, "Message number: %d", i)
 	}
 }
