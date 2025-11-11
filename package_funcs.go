@@ -102,6 +102,9 @@ func withLogger(ctx context.Context, fn func(*ZeroLogger, context.Context)) {
 	}
 	if globalLogger != nil {
 		globalLogger.logMissingLoggerWarning()
+		// Pass the global logger in the context to allow further context-based logging.
+		// So this Warning is only logged once.
+		ctx = context.WithValue(ctx, loggerKey, globalLogger)
 		fn(globalLogger, ctx)
 	}
 }
