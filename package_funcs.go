@@ -109,14 +109,14 @@ func withLogger(ctx context.Context, fn func(*ZeroLogger, context.Context)) {
 	}
 }
 
-func SetLogLevel(ctx context.Context, level string) {
+func SetLogLevel(ctx context.Context, level string) error {
 	if logger := loggerFromContextValue(ctx); logger != nil {
-		logger.SetLogLevel(level)
-		return
+		return logger.SetLogLevel(level)
 	}
 	if globalLogger != nil {
-		globalLogger.SetLogLevel(level)
+		return globalLogger.SetLogLevel(level)
 	}
+	return nil
 }
 
 func GetLogLevel(ctx context.Context) string {

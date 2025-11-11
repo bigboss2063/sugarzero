@@ -214,10 +214,10 @@ func (l *ZeroLogger) Fatalln(ctx context.Context, args ...any) {
 	l.writeArgs(ctx, zerolog.FatalLevel, callerSkipFramePublic, args...)
 }
 
-func (l *ZeroLogger) SetLogLevel(level string) {
+func (l *ZeroLogger) SetLogLevel(level string) error {
 	lvl, err := parseLevel(level)
 	if err != nil {
-		return
+		return err
 	}
 
 	l.mu.Lock()
@@ -225,6 +225,8 @@ func (l *ZeroLogger) SetLogLevel(level string) {
 
 	l.level = lvl
 	l.logger = l.logger.Level(lvl)
+
+	return nil
 }
 
 func (l *ZeroLogger) GetLogLevel() string {
@@ -253,7 +255,6 @@ func (l *ZeroLogger) writeArgs(ctx context.Context, level zerolog.Level, skipFra
 		return
 	}
 
-	// 优化：单参数时直接格式化，多参数时使用 fmt.Sprint
 	if len(args) == 1 {
 		event.Msgf("%v", args[0])
 	} else {
